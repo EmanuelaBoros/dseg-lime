@@ -221,3 +221,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- project-specific ---
+.venv/
+models/
+data/
+baselines/
+*.executed.ipynb
+# paper draft: unpublished submission, kept out of this public repo
+samplepaper.tex
+mybibliography.bib
+notes/
