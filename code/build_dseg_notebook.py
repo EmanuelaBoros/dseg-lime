@@ -22,7 +22,7 @@ to explain a **DiT** document classifier (`microsoft/dit-base-finetuned-rvlcdip`
 else:
     md("""# DSEG-LIME baseline on RVL-CDIP documents: ResNet-101 classifier
 
-Same notebook as `dseg_lime_rvlcdip.ipynb`, but the classifier being explained is a **ResNet-101 fine-tuned on RVL-CDIP**
+Same notebook as `dseg_lime_rvlcdip_dit.ipynb`, but the classifier being explained is a **ResNet-101 fine-tuned on RVL-CDIP**
 (`bdpc/resnet101_rvl-cdip`, a community checkpoint: 16 classes, 82% accuracy on its card) instead of DiT.
 
 * **Why not ResNet-50 (as in the *When superpixels fail on documents* paper)?** The only public ResNet-50 RVL-CDIP checkpoint I found
@@ -319,13 +319,14 @@ import pandas as pd
 df = pd.DataFrame(cmp_rows); display(df)
 df.groupby("segmenter")[["n_segments", "local_R2", "prob_drop_top3", "seconds"]].mean().round(3)""")
 
-md("""## Notes for the comparison with hierarchical LIME
+md("""## Notes
 
-* DSEG-LIME builds its hierarchy from SAM masks (containment graph), not from document layout; segments are not semantic blocks.
-* `local_R2` is LIME's own weighted R² of the surrogate (a local-fidelity proxy, see Exp. 1 of the paper).
-* SAM yields only ~6-8 usable masks on a 512px invoice (after DSEG's `remove_small_clusters`), so the baseline's
-  segments are coarse blobs, not layout blocks or words. That is the gap hierarchical semantic-block LIME targets.
-* Hide colour: the baseline default (mean colour per segment) is kept, rather than white as in hierarchical LIME.""")
+* DSEG-LIME builds its hierarchy from the overlap between masks (a containment graph). With SAM the units are generic objects and blobs; with OCR they are text blocks and lines.
+* At each level DSEG refines the **top 2** segments by coefficient into their children and fits LIME again; only the **last** level is returned, and the levels are fitted independently.
+* `local_R2` is LIME's own weighted R² of the surrogate on the neighbourhood (a local-fidelity proxy).
+* DSEG drops masks under 500 px (`Utilities/dseg_lime.py`, hard-coded); at `MAX_SIDE = 512` that removes small OCR boxes, and most single words.
+* SAM yields only ~6-8 usable masks on a 512 px invoice (after that filter).
+* Hide colour: the baseline default (mean colour per segment) is kept.""")
 
-nbf.write(nb, "notebooks/dseg_lime_rvlcdip.ipynb" if CLF == "dit" else "notebooks/dseg_lime_rvlcdip_resnet.ipynb")
+nbf.write(nb, "notebooks/dseg_lime_rvlcdip_dit.ipynb" if CLF == "dit" else "notebooks/dseg_lime_rvlcdip_resnet.ipynb")
 print("wrote", "dit" if CLF == "dit" else "resnet")
