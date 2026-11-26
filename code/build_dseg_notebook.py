@@ -186,31 +186,33 @@ print(f"SAM: {time.time() - t0:.0f}s, {len(np.unique(exp.segments))} segments at
 
 md("""## 4. Visualise (SAM): segments ranked by LIME coefficient for the predicted class
 
-Green = pushes towards the predicted class, red = pushes against, yellow = close to 0. Only the 8 strongest segments are coloured; the rest are left uncoloured. The colour scale is set per panel, so intensities are not comparable between panels.""")
-code("""def show(exp, image, label, k=8, ax=None, cbar=False):
-    \"\"\"Overlay the k segments with the largest |LIME coefficient| for `label`.
-    green = pushes towards the class, red = pushes against, yellow = near 0. Other segments are left uncoloured.
-    The colour scale is symmetric and set per call (max |coefficient| in the panel), so it is not comparable across panels.\"\"\"
+Green = pushes towards the predicted class, red = pushes against, yellow = close to 0. Every segment is coloured, including the small text boxes. The colour scale is clipped at the 90th percentile of |coefficient| so that one huge segment (often the page background) does not wash out the rest, and it is set per panel, so intensities are not comparable between panels.""")
+code("""def show(exp, image, label, k=None, ax=None, cbar=False, clip_pct=90):
+    \"\"\"Overlay the LIME coefficient of EVERY segment for `label` (k=None), or only the k largest |coefficients|.
+    green = pushes towards the class, red = pushes against, yellow = close to 0.
+    The colour scale is symmetric and clipped at the clip_pct-th percentile of |coefficient|, so one huge segment cannot
+    wash out the others (values above the clip saturate). It is set per panel, so it is not comparable across panels.\"\"\"
     ax = ax or plt.gca()
-    coefs = {t[0]: t[1] for t in exp.local_exp[label]}   # entries are (segment_id, weight, 0.0)
-    heat = np.full(exp.segments.shape, np.nan)            # NaN = not among the k strongest -> transparent
-    for sid, w in sorted(coefs.items(), key=lambda t: -abs(t[1]))[:k]:
+    items = sorted(((t[0], t[1]) for t in exp.local_exp[label]), key=lambda t: -abs(t[1]))   # entries are (segment_id, weight, 0.0)
+    items = items[:k] if k else items
+    heat = np.full(exp.segments.shape, np.nan)            # NaN = not drawn (only when k is set)
+    for sid, w in items:
         heat[exp.segments == sid] = w
-    m = np.nanmax(np.abs(heat)) if np.isfinite(heat).any() else 1.0
+    m = float(np.percentile([abs(w) for _, w in items], clip_pct)) or max(abs(w) for _, w in items) or 1.0
     ax.imshow(image)
     im = ax.imshow(np.ma.masked_invalid(heat), cmap="RdYlGn", vmin=-m, vmax=m, alpha=0.6)
     ax.imshow(mark_boundaries(np.zeros(image.shape[:2]), exp.segments.astype(int))[..., 0], cmap="gray_r", alpha=0.25)
     ax.axis("off")
     if cbar:
-        c = ax.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
-        c.set_label("LIME coefficient\\n(green = for the class, red = against)", fontsize=8)
+        c = ax.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.02, extend="both")
+        c.set_label(f"LIME coefficient (clipped at the {clip_pct}th percentile of |w|)\\ngreen = for the class, red = against", fontsize=8)
 
 label = exp.top_labels[0]
 print("explained class:", id2label[int(label)])
 fig, ax = plt.subplots(1, 2, figsize=(10, 7))
 ax[0].imshow(image); ax[0].set_title(f"input: {name}", fontsize=9); ax[0].axis("off")
 show(exp, image, label, ax=ax[1], cbar=True)
-ax[1].set_title(f"DSEG-LIME (SAM): 8 strongest segments for '{id2label[int(label)]}'\\ngreen = pushes towards the class, red = against", fontsize=9)
+ax[1].set_title(f"DSEG-LIME (SAM): all segments, coloured by LIME coefficient, for '{id2label[int(label)]}'\\ngreen = pushes towards the class, red = against", fontsize=9)
 plt.show()""")
 
 md("""## 3b. One document, step by step: OCR
@@ -234,7 +236,7 @@ print("explained class:", id2label[int(label_ocr)])
 fig, ax = plt.subplots(1, 2, figsize=(10, 7))
 ax[0].imshow(image); ax[0].set_title(f"input: {name}", fontsize=9); ax[0].axis("off")
 show(exp_ocr, image, label_ocr, ax=ax[1], cbar=True)
-ax[1].set_title(f"DSEG-LIME (OCR, {BACKEND}): 8 strongest segments for '{id2label[int(label_ocr)]}'\\ngreen = pushes towards the class, red = against", fontsize=9)
+ax[1].set_title(f"DSEG-LIME (OCR, {BACKEND}): all segments, coloured by LIME coefficient, for '{id2label[int(label_ocr)]}'\\ngreen = pushes towards the class, red = against", fontsize=9)
 plt.show()""")
 
 md("## 4c. Side by side: SAM vs OCR on this page")
