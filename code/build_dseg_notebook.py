@@ -135,7 +135,7 @@ for row, (cls, f) in tqdm(zip(axes, first_per_class.items()), total=len(first_pe
     for a in row: a.axis("off")
 plt.tight_layout(); plt.show()""")
 
-md("## 3. One document, step by step")
+md("## 3. One document, step by step: SAM")
 code("""name = "invoice_1.png"
 image, path = load_doc(name)
 probs = classifier_fn(image[None])[0]
@@ -151,9 +151,9 @@ with dseg_plots(f"{name} | DSEG segmentation (SAM)"):      # titles the per-leve
     exp = explainer.explain_instance(image=image, classifier_fn=classifier_fn,
                                      feature_extractor=mask_generator, model=sam, image_path=path,
                                      num_samples=NUM_SAMPLES, iterations=ITERATIONS, progress_bar=False)
-print(f"{time.time() - t0:.0f}s, {len(np.unique(exp.segments))} segments at the last level")""")
+print(f"SAM: {time.time() - t0:.0f}s, {len(np.unique(exp.segments))} segments at the last level")""")
 
-md("""## 4. Visualise: segments ranked by LIME coefficient for the predicted class
+md("""## 4. Visualise (SAM): segments ranked by LIME coefficient for the predicted class
 
 Green = pushes towards the predicted class, red = pushes against. Only the strongest segments are drawn.""")
 code("""def show(exp, image, label, k=8, ax=None):
@@ -171,8 +171,42 @@ label = exp.top_labels[0]
 print("explained class:", id2label[int(label)])
 fig, ax = plt.subplots(1, 2, figsize=(10, 7))
 ax[0].imshow(image); ax[0].set_title(f"input: {name}", fontsize=9); ax[0].axis("off")
-show(exp, image, label, ax=ax[1]); ax[1].set_title(f"DSEG-LIME (SAM): 8 strongest segments for '{id2label[int(label)]}'\\ngreen = pushes towards the class, red = against", fontsize=9)
+show(exp, image, label, ax=ax[1])
+ax[1].set_title(f"DSEG-LIME (SAM): 8 strongest segments for '{id2label[int(label)]}'\\ngreen = pushes towards the class, red = against", fontsize=9)
 plt.show()""")
+
+md("""## 3b. One document, step by step: OCR
+
+The same page, classifier and settings as section 3, but the segmenter is `ocr_generator` from section 2c (`BACKEND`, PaddleOCR by default) instead of SAM.""")
+code("""print([(id2label[int(i)], round(float(probs[i]), 3)) for i in top], "(same page, same classifier as section 3)")
+plt.imshow(image); plt.axis("off")
+plt.title(f"{name}\\ntrue class: {name.rsplit('_', 1)[0]} | DiT predicts: {id2label[int(top[0])]} ({probs[top[0]]:.2f})", fontsize=9)
+plt.show()""")
+
+code("""t0 = time.time()
+with dseg_plots(f"{name} | DSEG segmentation (OCR: {BACKEND})"):
+    exp_ocr = DSEG_Lime().explain_instance(image=image, classifier_fn=classifier_fn,
+                                           feature_extractor=ocr_generator, model=None, image_path=path,
+                                           num_samples=NUM_SAMPLES, iterations=ITERATIONS, progress_bar=False)
+print(f"OCR ({BACKEND}): {time.time() - t0:.0f}s, {len(np.unique(exp_ocr.segments))} segments at the last level")""")
+
+md("## 4b. Visualise (OCR): segments ranked by LIME coefficient for the predicted class")
+code("""label_ocr = exp_ocr.top_labels[0]
+print("explained class:", id2label[int(label_ocr)])
+fig, ax = plt.subplots(1, 2, figsize=(10, 7))
+ax[0].imshow(image); ax[0].set_title(f"input: {name}", fontsize=9); ax[0].axis("off")
+show(exp_ocr, image, label_ocr, ax=ax[1])
+ax[1].set_title(f"DSEG-LIME (OCR, {BACKEND}): 8 strongest segments for '{id2label[int(label_ocr)]}'\\ngreen = pushes towards the class, red = against", fontsize=9)
+plt.show()""")
+
+md("## 4c. Side by side: SAM vs OCR on this page")
+code("""fig, ax = plt.subplots(1, 3, figsize=(15, 7))
+ax[0].imshow(image); ax[0].set_title(f"input: {name}", fontsize=9); ax[0].axis("off")
+show(exp, image, label, ax=ax[1])
+ax[1].set_title(f"SAM ({len(np.unique(exp.segments))} segments) -> '{id2label[int(label)]}'", fontsize=9)
+show(exp_ocr, image, label_ocr, ax=ax[2])
+ax[2].set_title(f"OCR, {BACKEND} ({len(np.unique(exp_ocr.segments))} segments) -> '{id2label[int(label_ocr)]}'", fontsize=9)
+plt.tight_layout(); plt.show()""")
 
 md("## 5. All sample documents")
 code("""rows = []
