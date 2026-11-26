@@ -1,10 +1,17 @@
+"""Builds the DSEG-LIME RVL-CDIP notebook.   usage: build_dseg_notebook.py [dit|resnet]"""
+import sys
 import nbformat as nbf
+
+CLF = sys.argv[1] if len(sys.argv) > 1 else "dit"
+assert CLF in ("dit", "resnet"), CLF
+MODEL = {"dit": "DiT", "resnet": "ResNet-101"}[CLF]
 
 nb = nbf.v4.new_notebook()
 md = lambda s: nb.cells.append(nbf.v4.new_markdown_cell(s))
 code = lambda s: nb.cells.append(nbf.v4.new_code_cell(s))
 
-md("""# DSEG-LIME baseline on RVL-CDIP documents
+if CLF == "dit":
+    md("""# DSEG-LIME baseline on RVL-CDIP documents
 
 Runs the [DSEG-LIME](https://github.com/patrick-knab/DSEG-LIME) baseline (SAM-based, hierarchical segmentation + LIME)
 to explain a **DiT** document classifier (`microsoft/dit-base-finetuned-rvlcdip`) on a few RVL-CDIP test pages.
@@ -12,6 +19,17 @@ to explain a **DiT** document classifier (`microsoft/dit-base-finetuned-rvlcdip`
 * Samples: `data/rvlcdip_samples/` (made by `code/fetch_rvlcdip_samples.py`, only pages DiT classifies correctly).
 * Baseline code is used unmodified from `baselines/DSEG-LIME`; TensorFlow imports are stubbed by `code/dseg_shims.py`.
 * Segmenter: SAM ViT-B (the repo's demo uses ViT-H; ViT-B is ~6x smaller and fast enough on CPU).""")
+else:
+    md("""# DSEG-LIME baseline on RVL-CDIP documents: ResNet-101 classifier
+
+Same notebook as `dseg_lime_rvlcdip.ipynb`, but the classifier being explained is a **ResNet-101 fine-tuned on RVL-CDIP**
+(`bdpc/resnet101_rvl-cdip`, a community checkpoint: 16 classes, 82% accuracy on its card) instead of DiT.
+
+* **Why not ResNet-50 (as in the *When superpixels fail on documents* paper)?** The only public ResNet-50 RVL-CDIP checkpoint I found
+  (`jordyvl/resnet50_rvl-cdip`) still has the 1000-class ImageNet head and got 0/13 on our pages, so it is not usable.
+* Preprocessing: the standard ResNet one (resize to 256, **centre-crop 224**). The crop drops a 12% border, so segments there cannot influence the prediction.
+* On our 13 sample pages this ResNet gets 11 right; the three pages in `DOCS` are among them.
+* Samples come from `data/rvlcdip_samples/` (pages DiT classified correctly). Baseline code is used unmodified from `baselines/DSEG-LIME`.""")
 
 code("""import sys, time, json
 from pathlib import Path
@@ -33,7 +51,7 @@ SAMPLES = ROOT / "data" / "rvlcdip_samples"
 MAX_SIDE = 512        # documents are downscaled for SAM / LIME speed
 NUM_SAMPLES = 256     # LIME neighbourhood size per iteration
 ITERATIONS = 2        # DSEG hierarchy depth (coarse -> fine)
-DEVICE = "cpu"        # SAM + DiT; set "mps"/"cuda" if available and stable
+DEVICE = "cpu"        # SAM + classifier; set "mps"/"cuda" if available and stable
 DOCS = ["invoice_1.png", "letter_1.png", "resume_1.png"]   # the pages used everywhere below, one per class (files in data/rvlcdip_samples)
 
 import contextlib
@@ -57,16 +75,30 @@ def dseg_plots(title=None):
     finally:
         plt.show, plt.imshow, plt.close = real""")
 
-md("## 1. Classifier to explain: DiT fine-tuned on RVL-CDIP")
-code("""proc = AutoImageProcessor.from_pretrained("microsoft/dit-base-finetuned-rvlcdip")
-dit = AutoModelForImageClassification.from_pretrained("microsoft/dit-base-finetuned-rvlcdip").eval().to(DEVICE)
-id2label = dit.config.id2label
+if CLF == "dit":
+    md("## 1. Classifier to explain: DiT fine-tuned on RVL-CDIP")
+    code("""MODEL_NAME = "DiT"
+proc = AutoImageProcessor.from_pretrained("microsoft/dit-base-finetuned-rvlcdip")
+clf_model = AutoModelForImageClassification.from_pretrained("microsoft/dit-base-finetuned-rvlcdip").eval().to(DEVICE)
+id2label = clf_model.config.id2label
 
 @torch.no_grad()
 def classifier_fn(images):
     \"\"\"DSEG/LIME interface: (n, H, W, 3) uint8 -> (n, 16) class probabilities.\"\"\"
     x = proc([Image.fromarray(np.asarray(i, dtype=np.uint8)) for i in images], return_tensors="pt")
-    return dit(**x.to(DEVICE)).logits.softmax(-1).cpu().numpy()""")
+    return clf_model(**x.to(DEVICE)).logits.softmax(-1).cpu().numpy()""")
+else:
+    md("## 1. Classifier to explain: ResNet-101 fine-tuned on RVL-CDIP")
+    code("""MODEL_NAME = "ResNet-101"
+proc = AutoImageProcessor.from_pretrained("microsoft/resnet-101")      # the checkpoint ships no preprocessor config; this is its base model's
+clf_model = AutoModelForImageClassification.from_pretrained("bdpc/resnet101_rvl-cdip").eval().to(DEVICE)
+id2label = {i: l.replace("_", " ") for i, l in clf_model.config.id2label.items()}   # e.g. scientific_report -> scientific report
+
+@torch.no_grad()
+def classifier_fn(images):
+    \"\"\"DSEG/LIME interface: (n, H, W, 3) uint8 -> (n, 16) class probabilities.\"\"\"
+    x = proc([Image.fromarray(np.asarray(i, dtype=np.uint8)) for i in images], return_tensors="pt")
+    return clf_model(**x.to(DEVICE)).logits.softmax(-1).cpu().numpy()""")
 
 md("## 2. SAM segmenter")
 code("""ckpt = ROOT / "models" / "sam_vit_b_01ec64.pth"
@@ -141,7 +173,7 @@ probs = classifier_fn(image[None])[0]
 top = probs.argsort()[::-1][:3]
 print([(id2label[int(i)], round(float(probs[i]), 3)) for i in top])
 plt.imshow(image); plt.axis("off")
-plt.title(f"{name}\\ntrue class: {name.rsplit('_', 1)[0]} | DiT predicts: {id2label[int(top[0])]} ({probs[top[0]]:.2f})", fontsize=9)
+plt.title(f"{name}\\ntrue class: {name.rsplit('_', 1)[0]} | {MODEL_NAME} predicts: {id2label[int(top[0])]} ({probs[top[0]]:.2f})", fontsize=9)
 plt.show()""")
 
 code("""t0 = time.time()
@@ -186,7 +218,7 @@ md("""## 3b. One document, step by step: OCR
 The same page, classifier and settings as section 3, but the segmenter is `ocr_generator` from section 2c (`BACKEND`, PaddleOCR by default) instead of SAM.""")
 code("""print([(id2label[int(i)], round(float(probs[i]), 3)) for i in top], "(same page, same classifier as section 3)")
 plt.imshow(image); plt.axis("off")
-plt.title(f"{name}\\ntrue class: {name.rsplit('_', 1)[0]} | DiT predicts: {id2label[int(top[0])]} ({probs[top[0]]:.2f})", fontsize=9)
+plt.title(f"{name}\\ntrue class: {name.rsplit('_', 1)[0]} | {MODEL_NAME} predicts: {id2label[int(top[0])]} ({probs[top[0]]:.2f})", fontsize=9)
 plt.show()""")
 
 code("""t0 = time.time()
@@ -295,4 +327,5 @@ md("""## Notes for the comparison with hierarchical LIME
   segments are coarse blobs, not layout blocks or words. That is the gap hierarchical semantic-block LIME targets.
 * Hide colour: the baseline default (mean colour per segment) is kept, rather than white as in hierarchical LIME.""")
 
-nbf.write(nb, "notebooks/dseg_lime_rvlcdip.ipynb")
+nbf.write(nb, "notebooks/dseg_lime_rvlcdip.ipynb" if CLF == "dit" else "notebooks/dseg_lime_rvlcdip_resnet.ipynb")
+print("wrote", "dit" if CLF == "dit" else "resnet")
