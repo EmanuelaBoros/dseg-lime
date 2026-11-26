@@ -34,6 +34,7 @@ MAX_SIDE = 512        # documents are downscaled for SAM / LIME speed
 NUM_SAMPLES = 256     # LIME neighbourhood size per iteration
 ITERATIONS = 2        # DSEG hierarchy depth (coarse -> fine)
 DEVICE = "cpu"        # SAM + DiT; set "mps"/"cuda" if available and stable
+DOCS = ["invoice_1.png", "letter_1.png", "resume_1.png"]   # the pages used everywhere below, one per class (files in data/rvlcdip_samples)
 
 import contextlib
 @contextlib.contextmanager
@@ -94,9 +95,7 @@ code("""def overlay(img, masks, seed=0):
         canvas[seg] = 0.4 * canvas[seg] + 0.6 * rng.integers(40, 255, 3)
     return canvas.astype(np.uint8)
 
-first_per_class = {}
-for f in sorted(p.name for p in SAMPLES.glob("*.png")):
-    first_per_class.setdefault(f.rsplit("_", 1)[0], f)
+first_per_class = {f.rsplit("_", 1)[0]: f for f in DOCS}      # {class: file}
 
 fig, axes = plt.subplots(len(first_per_class), 3, figsize=(9, 4.2 * len(first_per_class)))
 for row, (cls, f) in tqdm(zip(axes, first_per_class.items()), total=len(first_per_class), desc="SAM masks"):
@@ -155,23 +154,30 @@ print(f"SAM: {time.time() - t0:.0f}s, {len(np.unique(exp.segments))} segments at
 
 md("""## 4. Visualise (SAM): segments ranked by LIME coefficient for the predicted class
 
-Green = pushes towards the predicted class, red = pushes against. Only the strongest segments are drawn.""")
-code("""def show(exp, image, label, k=8, ax=None):
+Green = pushes towards the predicted class, red = pushes against, yellow = close to 0. Only the 8 strongest segments are coloured; the rest are left uncoloured. The colour scale is set per panel, so intensities are not comparable between panels.""")
+code("""def show(exp, image, label, k=8, ax=None, cbar=False):
+    \"\"\"Overlay the k segments with the largest |LIME coefficient| for `label`.
+    green = pushes towards the class, red = pushes against, yellow = near 0. Other segments are left uncoloured.
+    The colour scale is symmetric and set per call (max |coefficient| in the panel), so it is not comparable across panels.\"\"\"
     ax = ax or plt.gca()
     coefs = {t[0]: t[1] for t in exp.local_exp[label]}   # entries are (segment_id, weight, 0.0)
-    heat = np.zeros(exp.segments.shape)
+    heat = np.full(exp.segments.shape, np.nan)            # NaN = not among the k strongest -> transparent
     for sid, w in sorted(coefs.items(), key=lambda t: -abs(t[1]))[:k]:
         heat[exp.segments == sid] = w
-    m = np.abs(heat).max() or 1
-    ax.imshow(image); ax.imshow(heat, cmap="RdYlGn", vmin=-m, vmax=m, alpha=0.55)
+    m = np.nanmax(np.abs(heat)) if np.isfinite(heat).any() else 1.0
+    ax.imshow(image)
+    im = ax.imshow(np.ma.masked_invalid(heat), cmap="RdYlGn", vmin=-m, vmax=m, alpha=0.6)
     ax.imshow(mark_boundaries(np.zeros(image.shape[:2]), exp.segments.astype(int))[..., 0], cmap="gray_r", alpha=0.25)
     ax.axis("off")
+    if cbar:
+        c = ax.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+        c.set_label("LIME coefficient\\n(green = for the class, red = against)", fontsize=8)
 
 label = exp.top_labels[0]
 print("explained class:", id2label[int(label)])
 fig, ax = plt.subplots(1, 2, figsize=(10, 7))
 ax[0].imshow(image); ax[0].set_title(f"input: {name}", fontsize=9); ax[0].axis("off")
-show(exp, image, label, ax=ax[1])
+show(exp, image, label, ax=ax[1], cbar=True)
 ax[1].set_title(f"DSEG-LIME (SAM): 8 strongest segments for '{id2label[int(label)]}'\\ngreen = pushes towards the class, red = against", fontsize=9)
 plt.show()""")
 
@@ -195,24 +201,26 @@ code("""label_ocr = exp_ocr.top_labels[0]
 print("explained class:", id2label[int(label_ocr)])
 fig, ax = plt.subplots(1, 2, figsize=(10, 7))
 ax[0].imshow(image); ax[0].set_title(f"input: {name}", fontsize=9); ax[0].axis("off")
-show(exp_ocr, image, label_ocr, ax=ax[1])
+show(exp_ocr, image, label_ocr, ax=ax[1], cbar=True)
 ax[1].set_title(f"DSEG-LIME (OCR, {BACKEND}): 8 strongest segments for '{id2label[int(label_ocr)]}'\\ngreen = pushes towards the class, red = against", fontsize=9)
 plt.show()""")
 
 md("## 4c. Side by side: SAM vs OCR on this page")
 code("""fig, ax = plt.subplots(1, 3, figsize=(15, 7))
 ax[0].imshow(image); ax[0].set_title(f"input: {name}", fontsize=9); ax[0].axis("off")
-show(exp, image, label, ax=ax[1])
+show(exp, image, label, ax=ax[1], cbar=True)
 ax[1].set_title(f"SAM ({len(np.unique(exp.segments))} segments) -> '{id2label[int(label)]}'", fontsize=9)
-show(exp_ocr, image, label_ocr, ax=ax[2])
+show(exp_ocr, image, label_ocr, ax=ax[2], cbar=True)
 ax[2].set_title(f"OCR, {BACKEND} ({len(np.unique(exp_ocr.segments))} segments) -> '{id2label[int(label_ocr)]}'", fontsize=9)
 plt.tight_layout(); plt.show()""")
 
-md("## 5. All sample documents")
+md("""## 5. The selected documents: SAM
+
+The pages in `DOCS` (setup cell), one per class.""")
 code("""rows = []
-files = sorted(p.name for p in SAMPLES.glob("*.png"))
-fig, axes = plt.subplots(2, (len(files) + 1) // 2, figsize=(3.2 * ((len(files) + 1) // 2), 9))
-for ax, f in tqdm(zip(axes.ravel(), files), total=len(files), desc="DSEG-LIME (SAM)"):
+files = DOCS
+fig, axes = plt.subplots(1, len(files), figsize=(5 * len(files), 7))
+for ax, f in tqdm(zip(np.atleast_1d(axes).ravel(), files), total=len(files), desc="DSEG-LIME (SAM)"):
     img, p = load_doc(f)
     t0 = time.time()
     with dseg_plots(None):
@@ -225,6 +233,26 @@ for ax, f in tqdm(zip(axes.ravel(), files), total=len(files), desc="DSEG-LIME (S
                  "local_R2": round(float(e.score[lab]), 3), "seconds": round(time.time() - t0)})
 plt.tight_layout(); plt.show()
 import pandas as pd; pd.DataFrame(rows)""")
+
+md("""## 5b. The selected documents: OCR
+
+Same grid and table as section 5, with `ocr_generator` (section 2c, `BACKEND`) as the segmenter instead of SAM.""")
+code("""rows_ocr = []
+files = DOCS
+fig, axes = plt.subplots(1, len(files), figsize=(5 * len(files), 7))
+for ax, f in tqdm(zip(np.atleast_1d(axes).ravel(), files), total=len(files), desc=f"DSEG-LIME (OCR, {BACKEND})"):
+    img, p = load_doc(f)
+    t0 = time.time()
+    with dseg_plots(None):
+        e = DSEG_Lime().explain_instance(image=img, classifier_fn=classifier_fn, feature_extractor=ocr_generator,
+                                         model=None, image_path=p, num_samples=NUM_SAMPLES,
+                                         iterations=ITERATIONS, progress_bar=False)
+    lab = e.top_labels[0]
+    show(e, img, lab, ax=ax); ax.set_title(f"{f} (true: {f.rsplit('_', 1)[0]})\\nDSEG + OCR ({BACKEND}) -> predicted: {id2label[int(lab)]}", fontsize=8)
+    rows_ocr.append({"file": f, "pred": id2label[int(lab)], "n_segments": int(len(np.unique(e.segments))),
+                     "local_R2": round(float(e.score[lab]), 3), "seconds": round(time.time() - t0)})
+plt.tight_layout(); plt.show()
+import pandas as pd; pd.DataFrame(rows_ocr)""")
 
 md("""## 6. SAM vs OCR segments inside DSEG-LIME
 
